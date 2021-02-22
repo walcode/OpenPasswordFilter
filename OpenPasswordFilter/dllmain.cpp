@@ -57,7 +57,7 @@ bool bPasswordOk = true;
 //
 // make sure all data is sent through the socket
 //
-int sendall(SOCKET s, const char *buf, int *len) {
+int sendall(SOCKET s, const char* buf, int* len) {
 	int total = 0;        // how many bytes we've sent
 	int bytesleft = *len; // how many we have left to send
 	int n;
@@ -70,6 +70,7 @@ int sendall(SOCKET s, const char *buf, int *len) {
 	}
 
 	*len = total; // return number actually sent here
+	SecureZeroMemory(&buf, sizeof(buf));
 
 	return n == -1 ? -1 : 0; // return -1 onm failure, 0 on success
 }
@@ -77,8 +78,8 @@ int sendall(SOCKET s, const char *buf, int *len) {
 // Regular DLL boilerplate
 
 BOOL __stdcall APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReserved) {
-	WSADATA wsa;
-	FILE *f = NULL;
+//	WSADATA wsa;
+	FILE* f = NULL;
 
 	switch (ul_reason_for_call) {
 	case DLL_PROCESS_ATTACH:
@@ -100,10 +101,10 @@ extern "C" __declspec(dllexport) BOOLEAN __stdcall InitializeChangeNotify(void) 
 	return TRUE;
 }
 
-extern "C" __declspec(dllexport) int __stdcall 
-PasswordChangeNotify(PUNICODE_STRING *UserName, 
-                     ULONG RelativeId, 
-                     PUNICODE_STRING *NewPassword) {
+extern "C" __declspec(dllexport) int __stdcall
+PasswordChangeNotify(PUNICODE_STRING UserName,
+	ULONG RelativeId,
+	PUNICODE_STRING NewPassword) {
 	return 0;
 }
 
@@ -118,8 +119,7 @@ PasswordChangeNotify(PUNICODE_STRING *UserName,
 //
 //    <connect>
 //    client:   test\n
-//    client:   Username\n
-//    client:   Password1\n
+//    client:   Username\nPassword\n
 //    server:   false\n
 //    <disconnect>
 //
@@ -127,22 +127,28 @@ void askServer(SOCKET sock, PUNICODE_STRING AccountName, PUNICODE_STRING Passwor
 	using convert_type = std::codecvt_utf8<wchar_t>;
 	std::wstring_convert<convert_type, wchar_t> converter;
 	char rcBuffer[1024];
-	char *preamble = "test\n"; //command that is used to start password testing
+	char* preamble = "test\n"; //command that is used to start password testing
 	int i;
 	int len;
 
 	i = send(sock, preamble, (int)strlen(preamble), 0); //send test command
 	if (i != SOCKET_ERROR) {
+		std::wstring wAccountName(AccountName->Buffer, AccountName->Length / sizeof(WCHAR));
+		wAccountName.push_back('\n');
 		std::wstring wPassword(Password->Buffer, Password->Length / sizeof(WCHAR));
 		wPassword.push_back('\n');
+		std::wstring wPayload(wAccountName + wPassword);
 
-		std::string sPassword = converter.to_bytes(wPassword);
+		std::string sPayload = converter.to_bytes(wPayload);
 
-		const char * cPassword = sPassword.c_str();
-		len = static_cast<int>(sPassword.size());
-		i = sendall(sock, cPassword, &len);
-
-		//i = send(sock, sPassword.c_str(), sPassword.size(), 0);
+		const char* cPayload = sPayload.c_str();
+		len = static_cast<int>(sPayload.size());
+		i = sendall(sock, cPayload, &len);
+		SecureZeroMemory(&wAccountName, sizeof(wAccountName));
+		SecureZeroMemory(&wPassword, sizeof(wPassword));
+		SecureZeroMemory(&wPayload, sizeof(wPayload));
+		SecureZeroMemory(&sPayload, sizeof(sPayload));
+		SecureZeroMemory(&cPayload, sizeof(cPayload));
 
 		if (i != SOCKET_ERROR) {
 			i = recv(sock, rcBuffer, sizeof(rcBuffer), 0);//read response
@@ -164,13 +170,13 @@ void askServer(SOCKET sock, PUNICODE_STRING AccountName, PUNICODE_STRING Passwor
 // whether the indicated password is acceptable according to the filter service.
 // The service is a C# program also in this solution, titled "OPFService".
 //
-unsigned int __stdcall CreateSocket(void *v) {
+unsigned int __stdcall CreateSocket(void* v) {
 	//the account object
-	PasswordFilterAccount *pfAccount = static_cast<PasswordFilterAccount*>(v);
+	PasswordFilterAccount* pfAccount = static_cast<PasswordFilterAccount*>(v);
 
 	SOCKET sock = INVALID_SOCKET;
-	struct addrinfo *result = NULL;
-	struct addrinfo *ptr = NULL;
+	struct addrinfo* result = NULL;
+	struct addrinfo* ptr = NULL;
 	struct addrinfo hints;
 	bPasswordOk = TRUE; // set fail open
 
@@ -210,35 +216,47 @@ unsigned int __stdcall CreateSocket(void *v) {
 }
 
 extern "C" __declspec(dllexport) BOOLEAN __stdcall PasswordFilter(PUNICODE_STRING AccountName,
-																  PUNICODE_STRING FullName,
-																  PUNICODE_STRING Password,
-																  BOOLEAN SetOperation) {
+	PUNICODE_STRING FullName,
+	PUNICODE_STRING Password,
+	BOOLEAN SetOperation) {
 
-	//build the account struct
-	PasswordFilterAccount *pfAccount = new PasswordFilterAccount();
-	pfAccount->AccountName = AccountName;
-	pfAccount->Password = Password;
+	std::wstring wAccountName(AccountName->Buffer, AccountName->Length / sizeof(WCHAR));
 
-	//start an asynchronous thread to be able to kill the thread if it exceeds the timout
-	HANDLE pfHandle = (HANDLE)_beginthreadex(0, 0, CreateSocket, (LPVOID *)pfAccount, 0, 0);
+	// The krbtgt account gets set with a very long complex password that could trigger the service to reject the 
+	// password due to a substring match.  Doesn't add complexity if we check for it and skip it here.
 
-	DWORD dWaitFor = WaitForSingleObject(pfHandle, 30000); //do not exceed the timeout
-	if (dWaitFor == WAIT_TIMEOUT) {
-		//timeout exceeded
-	}
-	else if (dWaitFor == WAIT_OBJECT_0) {
-		//here is where we want to be
+	if (wAccountName.compare(L"krbtgt") != 0) {
+
+		//build the account struct
+		PasswordFilterAccount* pfAccount = new PasswordFilterAccount();
+		pfAccount->AccountName = AccountName;
+		pfAccount->Password = Password;
+
+		//start an asynchronous thread to be able to kill the thread if it exceeds the timout
+		HANDLE pfHandle = (HANDLE)_beginthreadex(0, 0, CreateSocket, (LPVOID*)pfAccount, 0, 0);
+
+		DWORD dWaitFor = WaitForSingleObject(pfHandle, 30000); //do not exceed the timeout
+		if (dWaitFor == WAIT_TIMEOUT) {
+			//timeout exceeded
+		}
+		else if (dWaitFor == WAIT_OBJECT_0) {
+			//here is where we want to be
+		}
+		else {
+			//WAIT_ABANDONED
+			//WAIT_FAILED
+		}
+
+		if (pfHandle != INVALID_HANDLE_VALUE && pfHandle != 0) {
+			if (CloseHandle(pfHandle)) {
+				pfHandle = INVALID_HANDLE_VALUE;
+			}
+		}
+		delete pfAccount;
 	}
 	else {
-		//WAIT_ABANDONED
-		//WAIT_FAILED
+		bPasswordOk = TRUE;
 	}
-
-	if (pfHandle != INVALID_HANDLE_VALUE && pfHandle != 0) {
-		if (CloseHandle(pfHandle)) {
-			pfHandle = INVALID_HANDLE_VALUE;
-		}
-	}
-
+	SecureZeroMemory(&wAccountName, sizeof(wAccountName));
 	return bPasswordOk;
 }
