@@ -32,8 +32,15 @@ int _tmain(int argc, _TCHAR* argv[])
 {
 	WSADATA wsa;
 	PUNICODE_STRING pwd;
+	PUNICODE_STRING username;
+	PUNICODE_STRING fullname;
+	
+	TCHAR* sAccountName = L"username";
+	TCHAR* sFullName = L"Full Name";
 
-	pwd = (PUNICODE_STRING) malloc(sizeof(PUNICODE_STRING));
+	pwd = (PUNICODE_STRING)malloc(sizeof(PUNICODE_STRING));
+	username = (PUNICODE_STRING)malloc(sizeof(PUNICODE_STRING));
+	fullname = (PUNICODE_STRING)malloc(sizeof(PUNICODE_STRING));
 
 	printf("\n");
 	printf("----------------------------------------------------------------------\n");
@@ -41,8 +48,14 @@ int _tmain(int argc, _TCHAR* argv[])
 	printf("----------------------------------------------------------------------\n");
 	printf("\n");
 	if (argc < 2) {
-		printf("usage: opftest <password>\n");
+		printf("usage: opftest <password> [AccountName] [FullName]\n");
 		return 2;
+	}
+	if (argc >= 3) {
+		sAccountName = argv[2];
+	}
+	if (argc >= 4) {
+		sFullName = argv[3];
 	}
 
 	printf("Initializing winsock...");
@@ -55,19 +68,25 @@ int _tmain(int argc, _TCHAR* argv[])
 	printf("Loading library...");
 	HMODULE lib = LoadLibrary(L"OpenPasswordFilter.dll");
 	if (lib != NULL) {
-		printf("success (%08x).\n", lib);
+		printf("success (%p).\n", lib);
 		printf("Getting PasswordFilter() address...");
 		PasswordFilter = (PasswordFilter_t)GetProcAddress(lib, "PasswordFilter");
 		if (PasswordFilter != NULL) {
-			printf("success (%08x).\n", PasswordFilter);
+			printf("success (%p).\n", PasswordFilter);
 			if (PasswordFilter == NULL) {
 				return 1;
 			}
-			wprintf(L"Testing password %s...", argv[1]);
-			pwd->Length = wcslen(argv[1]) * sizeof(WCHAR);
-			pwd->MaximumLength = wcslen(argv[1]) * sizeof(WCHAR);
+			pwd->Length = static_cast<USHORT>(wcslen(argv[1]) * sizeof(WCHAR));
+			pwd->MaximumLength = static_cast<USHORT>(wcslen(argv[1]) * sizeof(WCHAR));
 			pwd->Buffer = argv[1];
-			if (PasswordFilter(pwd, pwd, pwd, 1)) {
+			username->Length = static_cast<USHORT>(wcslen(sAccountName) * sizeof(WCHAR));
+			username->MaximumLength = static_cast<USHORT>(wcslen(sAccountName) * sizeof(WCHAR));
+			username->Buffer = sAccountName;
+			fullname->Length = static_cast<USHORT>(wcslen(sFullName) * sizeof(WCHAR));
+			fullname->MaximumLength = static_cast<USHORT>(wcslen(sFullName) * sizeof(WCHAR));
+			fullname->Buffer = sFullName;
+			wprintf(L"Testing password %wZ for user %wZ (%wZ)...", pwd, username, fullname);
+			if (PasswordFilter(username, fullname, pwd, 1)) {
 				printf("success.\n");
 			}
 			else {
